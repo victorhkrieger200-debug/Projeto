@@ -25,6 +25,21 @@ function buildUser(authUser, profile = {}) {
   };
 }
 
+function buildSessionResponse(authData, profile) {
+  return {
+    user: buildUser(authData.user, profile),
+    accessToken: authData.session.access_token,
+    refreshToken: authData.session.refresh_token,
+    expiresAt: new Date(authData.session.expires_at * 1000).toISOString(),
+  };
+}
+
+function getBearerToken(req) {
+  const header = req.headers.authorization || '';
+  const [scheme, token] = header.split(' ');
+  return scheme?.toLowerCase() === 'bearer' ? token : '';
+}
+
 function getPublicAppUrl(req) {
   const configuredUrl = process.env.PUBLIC_APP_URL?.trim().replace(/\/$/, '');
   return configuredUrl || req.headers.origin || 'http://localhost:5173';
@@ -53,6 +68,22 @@ async function getProfile(userId) {
   return data;
 }
 
+async function getAuthenticatedUser(req) {
+  const token = getBearerToken(req);
+
+  if (!token) {
+    return { error: 'Sessão ausente ou expirada.' };
+  }
+
+  const { data, error } = await supabaseAdmin.auth.getUser(token);
+
+  if (error || !data.user) {
+    return { error: 'Sessão inválida ou expirada.' };
+  }
+
+  return { user: data.user, token };
+}
+
 export async function login(req, res) {
   try {
     const email = normalizeEmail(req.body?.email);
@@ -73,12 +104,7 @@ export async function login(req, res) {
 
     const profile = await getProfile(authData.user.id);
 
-    return res.status(200).json({
-      user: buildUser(authData.user, profile),
-      accessToken: authData.session.access_token,
-      refreshToken: authData.session.refresh_token,
-      expiresAt: new Date(authData.session.expires_at * 1000).toISOString(),
-    });
+    return res.status(200).json(buildSessionResponse(authData, profile));
   } catch (error) {
     safeLog('Erro inesperado no login.', error);
     return res.status(500).json({ error: 'Erro interno do servidor.' });
@@ -120,18 +146,79 @@ export async function register(req, res) {
       return res.status(500).json({ error: 'Conta criada, mas o perfil não foi sincronizado.' });
     }
 
-    return res.status(201).json({
-      user: buildUser(authData.user, { full_name: name, role: 'user' }),
-      accessToken: authData.session?.access_token ?? null,
-      refreshToken: authData.session?.refresh_token ?? null,
-      expiresAt: authData.session?.expires_at
-        ? new Date(authData.session.expires_at * 1000).toISOString()
-        : null,
-      requiresEmailConfirmation: !authData.session,
-    });
+    if (!authData.session) {
+      return res.status(201).json({
+        user: buildUser(authData.user, { full_name: name, role: 'user' }),
+        accessToken: null,
+        refreshToken: null,
+        expiresAt: null,
+        requiresEmailConfirmation: true,
+      });
+    }
+
+    return res.status(201).json(buildSessionResponse(authData, { full_name: name, role: 'user' }));
   } catch (error) {
     safeLog('Erro inesperado no cadastro.', error);
     return res.status(500).json({ error: 'Erro interno do servidor.' });
+  }
+}
+
+export async function me(req, res) {
+  try {
+    const { user, error } = await getAuthenticatedUser(req);
+
+    if (error) {
+      return res.status(401).json({ error });
+    }
+
+    const profile = await getProfile(user.id);
+    return res.status(200).json({ user: buildUser(user, profile) });
+  } catch (error) {
+    safeLog('Erro inesperado ao validar sessão.', error);
+    return res.status(500).json({ error: 'Erro interno do servidor.' });
+  }
+}
+
+export async function refreshSession(req, res) {
+  try {
+    const refreshToken = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : '';
+
+    if (!refreshToken) {
+      return res.status(400).json({ error: 'Refresh token é obrigatório.' });
+    }
+
+    const { data: authData, error: authError } = await supabase.auth.refreshSession({
+      refresh_token: refreshToken,
+    });
+
+    if (authError || !authData.user || !authData.session) {
+      return res.status(401).json({ error: 'Sessão expirada. Entre novamente.' });
+    }
+
+    const profile = await getProfile(authData.user.id);
+    return res.status(200).json(buildSessionResponse(authData, profile));
+  } catch (error) {
+    safeLog('Erro inesperado ao renovar sessão.', error);
+    return res.status(500).json({ error: 'Erro interno do servidor.' });
+  }
+}
+
+export async function logout(req, res) {
+  try {
+    const token = getBearerToken(req);
+
+    if (token) {
+      const { error } = await supabaseAdmin.auth.admin.signOut(token, 'local');
+
+      if (error) {
+        safeLog('Falha ao encerrar sessão no Supabase.', error);
+      }
+    }
+
+    return res.status(204).send();
+  } catch (error) {
+    safeLog('Erro inesperado no logout.', error);
+    return res.status(204).send();
   }
 }
 
