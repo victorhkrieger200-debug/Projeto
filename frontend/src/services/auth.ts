@@ -83,7 +83,6 @@ async function apiRequest<T extends { error?: string }>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
-
   let response: Response;
 
   try {
@@ -97,15 +96,6 @@ async function apiRequest<T extends { error?: string }>(
   } catch {
     throw new Error(NETWORK_ERROR_MESSAGE);
   }
-
-
-  const response = await fetch(`${API_BASE_URL}/api/auth${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...init.headers,
-    },
-  });
 
   const data = await parseJson<T>(response);
 
@@ -210,24 +200,6 @@ export async function getSession(
       }
       activeSession = refreshedSession;
     }
-
-
-    if (options.validateRemotely === false) {
-      return activeSession;
-    }
-
-    const data = await apiRequest<ApiMeResponse>('/me', {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${activeSession.token}` },
-    });
-
-    if (data.user) {
-      const validatedSession = { ...activeSession, user: normalizeUser(data.user) };
-      persistSession(validatedSession, rememberMe);
-      return validatedSession;
-    }
-
-
 
     if (options.validateRemotely === false) {
       return activeSession;
