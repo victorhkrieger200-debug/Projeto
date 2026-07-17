@@ -1,14 +1,12 @@
+import { supabase } from '@/lib/supabase';
 import type { AuthSession, AuthUser, SignInInput, SignUpInput } from '@/types/auth';
 
 const SESSION_STORAGE_KEY = 'atlhon-auth-session';
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:4000';
 
-interface AuthResponse {
-  user: AuthUser;
-  accessToken: string | null;
-  refreshToken?: string | null;
-  expiresAt?: string | null;
-  requiresEmailConfirmation?: boolean;
+interface ProfileRow {
+  id: string;
+  full_name: string | null;
+  role: 'admin' | 'user' | string | null;
 }
 
 function getStorage(rememberMe = true) {
@@ -31,74 +29,100 @@ function persistSession(session: AuthSession, rememberMe = true) {
   storage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
 }
 
-function createSession(data: AuthResponse): AuthSession {
-  if (!data.accessToken) {
-    throw new Error(
-      data.requiresEmailConfirmation
-        ? 'Conta criada. Confirme seu e-mail antes de entrar.'
-        : 'O Supabase não retornou uma sessão válida.',
-    );
+function normalizeRole(role: ProfileRow['role']): AuthUser['role'] {
+  return role === 'admin' ? 'admin' : 'user';
+}
+
+async function getProfile(userId: string): Promise<ProfileRow | null> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('id, full_name, role')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error('Login validado, mas não foi possível carregar o perfil do usuário.');
   }
 
+  return data;
+}
+
+async function upsertProfile(userId: string, fullName: string) {
+  const { error } = await supabase
+    .from('profiles')
+    .upsert({ id: userId, full_name: fullName, role: 'user' }, { onConflict: 'id' });
+
+  if (error) {
+    throw new Error('Conta criada, mas não foi possível salvar o perfil do usuário.');
+  }
+}
+
+async function createSession(
+  authSession: NonNullable<Awaited<ReturnType<typeof supabase.auth.getSession>>['data']['session']>,
+): Promise<AuthSession> {
+  const profile = await getProfile(authSession.user.id);
+
   return {
-    user: data.user,
-    token: data.accessToken,
-    refreshToken: data.refreshToken ?? undefined,
-    expiresAt: data.expiresAt ?? new Date(Date.now() + 1000 * 60 * 60).toISOString(),
+    user: {
+      id: authSession.user.id,
+      email: authSession.user.email ?? '',
+      name: profile?.full_name || authSession.user.user_metadata?.full_name || authSession.user.email || 'Usuário',
+      role: normalizeRole(profile?.role ?? null),
+    },
+    token: authSession.access_token,
+    refreshToken: authSession.refresh_token,
+    expiresAt: new Date((authSession.expires_at ?? Math.floor(Date.now() / 1000) + 3600) * 1000).toISOString(),
   };
 }
 
-async function parseApiResponse(response: Response) {
-  if (response.status === 204) return {};
-
-  return response.json().catch(() => ({}));
-}
-
-async function request<T>(path: string, init: RequestInit): Promise<T> {
-  const response = await fetch(`${BACKEND_URL}${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...init.headers,
-    },
+export async function signIn(input: SignInInput): Promise<AuthSession> {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: input.email.trim(),
+    password: input.password,
   });
 
-  const data = await parseApiResponse(response);
-
-  if (!response.ok) {
-    throw new Error(data.error || 'Não foi possível completar a solicitação.');
+  if (error || !data.session) {
+    throw new Error(error?.message || 'Credenciais inválidas.');
   }
 
-  return data as T;
-}
-
-export async function signIn(input: SignInInput): Promise<AuthSession> {
-  const data = await request<AuthResponse>('/api/auth/login', {
-    method: 'POST',
-    body: JSON.stringify({ email: input.email, password: input.password }),
-  });
-
-  const session = createSession(data);
+  const session = await createSession(data.session);
   persistSession(session, input.rememberMe ?? true);
   return session;
 }
 
 export async function signUp(input: SignUpInput): Promise<AuthSession> {
-  const data = await request<AuthResponse>('/api/auth/register', {
-    method: 'POST',
-    body: JSON.stringify({ name: input.name, email: input.email, password: input.password }),
+  const fullName = input.name.trim();
+  const { data, error } = await supabase.auth.signUp({
+    email: input.email.trim(),
+    password: input.password,
+    options: {
+      data: { full_name: fullName },
+      emailRedirectTo: `${window.location.origin}/dashboard`,
+    },
   });
 
-  const session = createSession(data);
+  if (error || !data.user) {
+    throw new Error(error?.message || 'Não foi possível criar a conta.');
+  }
+
+  if (!data.session) {
+    throw new Error('Conta criada. Confirme seu e-mail antes de entrar.');
+  }
+
+  await upsertProfile(data.user.id, fullName);
+  const session = await createSession(data.session);
   persistSession(session, input.rememberMe ?? true);
   return session;
 }
 
 export async function signOut(): Promise<void> {
+  await supabase.auth.signOut();
   clearSession();
 }
 
 export async function getSession(): Promise<AuthSession | null> {
+  if (typeof window === 'undefined') return null;
+
   const raw = window.localStorage.getItem(SESSION_STORAGE_KEY) ?? window.sessionStorage.getItem(SESSION_STORAGE_KEY);
   if (!raw) return null;
 
@@ -118,8 +142,11 @@ export async function getSession(): Promise<AuthSession | null> {
 }
 
 export async function requestPasswordReset(email: string): Promise<void> {
-  await request('/api/auth/password-reset', {
-    method: 'POST',
-    body: JSON.stringify({ email }),
+  const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+    redirectTo: `${window.location.origin}/forgot-password`,
   });
+
+  if (error) {
+    throw new Error(error.message || 'Não foi possível enviar o e-mail.');
+  }
 }
