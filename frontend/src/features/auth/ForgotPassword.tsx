@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useId } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
+import { isSupabaseConfigured, missingSupabaseEnvVars } from '@/lib/supabase';
 import './Auth.css';
 
 interface FieldErrors {
@@ -198,6 +199,15 @@ function ForgotPassword() {
 
           {!isSuccess ? (
             <>
+              {!isSupabaseConfigured && (
+                <div className="config-alert" role="status">
+                  <strong>Configuração necessária</strong>
+                  <span>
+                    Adicione {missingSupabaseEnvVars.join(' e ')} em <code>frontend/.env</code> para
+                    enviar links de recuperação.
+                  </span>
+                </div>
+              )}
               <div className="hero-copy">
                 <h2>Esqueceu a senha?</h2>
                 <h3>Insira seu e-mail para receber as instruções de recuperação.</h3>

@@ -1,4 +1,4 @@
-import { supabaseConfig } from '@/lib/supabase';
+import { missingSupabaseEnvVars, supabaseConfig } from '@/lib/supabase';
 import type { AuthSession, AuthUser, SignInInput, SignUpInput } from '@/types/auth';
 
 const SESSION_STORAGE_KEY = 'atlhon-auth-session';
@@ -54,7 +54,13 @@ function normalizeRole(role: ProfileRow['role']): AuthUser['role'] {
 
 function assertSupabaseConfigured() {
   if (!supabaseConfig) {
+
     throw new Error('Autenticação indisponível no momento. Tente novamente mais tarde.');
+
+    throw new Error(
+      `Configure ${missingSupabaseEnvVars.join(' e ')} no arquivo frontend/.env para habilitar a autenticação.`,
+    );
+
   }
 
   return supabaseConfig;

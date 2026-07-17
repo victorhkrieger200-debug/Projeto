@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useId } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
+import { isSupabaseConfigured, missingSupabaseEnvVars } from '@/lib/supabase';
 import './Auth.css';
 
 type FormMode = 'signin' | 'signup';
@@ -401,6 +402,16 @@ function Auth() {
               Criar conta
             </button>
           </div>
+
+          {!isSupabaseConfigured && (
+            <div className="config-alert" role="status">
+              <strong>Configuração necessária</strong>
+              <span>
+                Adicione {missingSupabaseEnvVars.join(' e ')} em <code>frontend/.env</code>. A tela
+                não fica mais em branco enquanto o ambiente é configurado.
+              </span>
+            </div>
+          )}
 
           <div className="hero-copy">
             {isSignin ? (
