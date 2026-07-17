@@ -1,7 +1,26 @@
-import { supabase } from '@/lib/supabase';
+import { supabaseConfig } from '@/lib/supabase';
 import type { AuthSession, AuthUser, SignInInput, SignUpInput } from '@/types/auth';
 
 const SESSION_STORAGE_KEY = 'atlhon-auth-session';
+
+interface SupabaseAuthUser {
+  id: string;
+  email?: string;
+  user_metadata?: {
+    full_name?: string;
+  };
+}
+
+interface SupabaseAuthResponse {
+  access_token?: string;
+  refresh_token?: string;
+  expires_at?: number;
+  expires_in?: number;
+  user?: SupabaseAuthUser;
+  msg?: string;
+  error?: string;
+  error_description?: string;
+}
 
 interface ProfileRow {
   id: string;
@@ -33,90 +52,138 @@ function normalizeRole(role: ProfileRow['role']): AuthUser['role'] {
   return role === 'admin' ? 'admin' : 'user';
 }
 
-async function getProfile(userId: string): Promise<ProfileRow | null> {
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('id, full_name, role')
-    .eq('id', userId)
-    .maybeSingle();
+function getAuthErrorMessage(data: SupabaseAuthResponse, fallback: string) {
+  return data.error_description || data.msg || data.error || fallback;
+}
 
-  if (error) {
-    throw new Error('Login validado, mas não foi possível carregar o perfil do usuário.');
+async function parseJson<T>(response: Response): Promise<T> {
+  if (response.status === 204) return {} as T;
+  return response.json().catch(() => ({} as T));
+}
+
+async function supabaseAuthRequest<T extends SupabaseAuthResponse>(path: string, init: RequestInit): Promise<T> {
+  const response = await fetch(`${supabaseConfig.url}/auth/v1${path}`, {
+    ...init,
+    headers: {
+      apikey: supabaseConfig.anonKey,
+      'Content-Type': 'application/json',
+      ...init.headers,
+    },
+  });
+  const data = await parseJson<T>(response);
+
+  if (!response.ok) {
+    throw new Error(getAuthErrorMessage(data, 'Não foi possível completar a solicitação.'));
   }
 
   return data;
 }
 
-async function upsertProfile(userId: string, fullName: string) {
-  const { error } = await supabase
-    .from('profiles')
-    .upsert({ id: userId, full_name: fullName, role: 'user' }, { onConflict: 'id' });
+async function supabaseRestRequest<T>(path: string, accessToken: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${supabaseConfig.url}/rest/v1${path}`, {
+    ...init,
+    headers: {
+      apikey: supabaseConfig.anonKey,
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      ...init.headers,
+    },
+  });
+  const data = await parseJson<T>(response);
 
-  if (error) {
-    throw new Error('Conta criada, mas não foi possível salvar o perfil do usuário.');
+  if (!response.ok) {
+    throw new Error('Login validado, mas não foi possível sincronizar o perfil do usuário.');
   }
+
+  return data;
 }
 
-async function createSession(
-  authSession: NonNullable<Awaited<ReturnType<typeof supabase.auth.getSession>>['data']['session']>,
-): Promise<AuthSession> {
-  const profile = await getProfile(authSession.user.id);
+async function getProfile(userId: string, accessToken: string): Promise<ProfileRow | null> {
+  const data = await supabaseRestRequest<ProfileRow[]>(
+    `/profiles?select=id,full_name,role&id=eq.${encodeURIComponent(userId)}&limit=1`,
+    accessToken,
+  );
+
+  return data[0] ?? null;
+}
+
+async function upsertProfile(userId: string, fullName: string, accessToken: string) {
+  await supabaseRestRequest('/profiles', accessToken, {
+    method: 'POST',
+    headers: {
+      Prefer: 'resolution=merge-duplicates',
+    },
+    body: JSON.stringify({ id: userId, full_name: fullName, role: 'user' }),
+  });
+}
+
+async function createSession(authData: SupabaseAuthResponse): Promise<AuthSession> {
+  if (!authData.access_token || !authData.user) {
+    throw new Error('O Supabase não retornou uma sessão válida.');
+  }
+
+  const profile = await getProfile(authData.user.id, authData.access_token);
 
   return {
     user: {
-      id: authSession.user.id,
-      email: authSession.user.email ?? '',
-      name: profile?.full_name || authSession.user.user_metadata?.full_name || authSession.user.email || 'Usuário',
+      id: authData.user.id,
+      email: authData.user.email ?? '',
+      name: profile?.full_name || authData.user.user_metadata?.full_name || authData.user.email || 'Usuário',
       role: normalizeRole(profile?.role ?? null),
     },
-    token: authSession.access_token,
-    refreshToken: authSession.refresh_token,
-    expiresAt: new Date((authSession.expires_at ?? Math.floor(Date.now() / 1000) + 3600) * 1000).toISOString(),
+    token: authData.access_token,
+    refreshToken: authData.refresh_token,
+    expiresAt: new Date(
+      (authData.expires_at ?? Math.floor(Date.now() / 1000) + (authData.expires_in ?? 3600)) * 1000,
+    ).toISOString(),
   };
 }
 
 export async function signIn(input: SignInInput): Promise<AuthSession> {
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email: input.email.trim(),
-    password: input.password,
+  const data = await supabaseAuthRequest<SupabaseAuthResponse>('/token?grant_type=password', {
+    method: 'POST',
+    body: JSON.stringify({ email: input.email.trim(), password: input.password }),
   });
 
-  if (error || !data.session) {
-    throw new Error(error?.message || 'Credenciais inválidas.');
-  }
-
-  const session = await createSession(data.session);
+  const session = await createSession(data);
   persistSession(session, input.rememberMe ?? true);
   return session;
 }
 
 export async function signUp(input: SignUpInput): Promise<AuthSession> {
   const fullName = input.name.trim();
-  const { data, error } = await supabase.auth.signUp({
-    email: input.email.trim(),
-    password: input.password,
-    options: {
+  const data = await supabaseAuthRequest<SupabaseAuthResponse>('/signup', {
+    method: 'POST',
+    body: JSON.stringify({
+      email: input.email.trim(),
+      password: input.password,
       data: { full_name: fullName },
-      emailRedirectTo: `${window.location.origin}/dashboard`,
-    },
+      gotrue_meta_security: {},
+    }),
   });
 
-  if (error || !data.user) {
-    throw new Error(error?.message || 'Não foi possível criar a conta.');
-  }
-
-  if (!data.session) {
+  if (!data.access_token || !data.user) {
     throw new Error('Conta criada. Confirme seu e-mail antes de entrar.');
   }
 
-  await upsertProfile(data.user.id, fullName);
-  const session = await createSession(data.session);
+  await upsertProfile(data.user.id, fullName, data.access_token);
+  const session = await createSession(data);
   persistSession(session, input.rememberMe ?? true);
   return session;
 }
 
 export async function signOut(): Promise<void> {
-  await supabase.auth.signOut();
+  const currentSession = await getSession();
+
+  if (currentSession?.token) {
+    await supabaseAuthRequest('/logout', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${currentSession.token}`,
+      },
+    }).catch(() => undefined);
+  }
+
   clearSession();
 }
 
@@ -142,11 +209,11 @@ export async function getSession(): Promise<AuthSession | null> {
 }
 
 export async function requestPasswordReset(email: string): Promise<void> {
-  const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-    redirectTo: `${window.location.origin}/forgot-password`,
+  await supabaseAuthRequest('/recover', {
+    method: 'POST',
+    body: JSON.stringify({
+      email: email.trim(),
+      redirect_to: `${window.location.origin}/forgot-password`,
+    }),
   });
-
-  if (error) {
-    throw new Error(error.message || 'Não foi possível enviar o e-mail.');
-  }
 }
