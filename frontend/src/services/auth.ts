@@ -1,32 +1,26 @@
+import type { Session, User } from '@supabase/supabase-js';
+import { isSupabaseConfigured, missingSupabaseEnvVars, supabase } from '@/lib/supabase';
 import type { AuthSession, AuthUser, SignInInput, SignUpInput } from '@/types/auth';
 
 const SESSION_STORAGE_KEY = 'atlhon-auth-session';
 const EXPIRATION_SAFETY_WINDOW_MS = 60_000;
-const API_BASE_URL =
-  (import.meta.env.VITE_API_URL as string | undefined)?.trim().replace(/\/$/, '') ||
-  'http://localhost:4000';
-const NETWORK_ERROR_MESSAGE =
-  'Não foi possível conectar ao backend de autenticação. Inicie o projeto com `npm run dev` na raiz, confirme que o backend está rodando em http://localhost:4000 e confira as variáveis SUPABASE_URL, SUPABASE_ANON_KEY e SUPABASE_SERVICE_ROLE_KEY.';
+const MIN_PASSWORD_LENGTH = 8;
 
-interface ApiAuthUser {
-  id: string;
-  email: string;
-  name: string;
-  role: 'admin' | 'user' | string;
+interface ProfileRow {
+  full_name?: string | null;
+  role?: string | null;
 }
 
-interface ApiAuthResponse {
-  user?: ApiAuthUser;
-  accessToken?: string | null;
-  refreshToken?: string | null;
-  expiresAt?: string | null;
-  requiresEmailConfirmation?: boolean;
-  error?: string;
-}
+function getSupabaseClient() {
+  if (!isSupabaseConfigured || !supabase) {
+    throw new Error(
+      `Autenticação indisponível. Configure ${missingSupabaseEnvVars.join(
+        ', ',
+      )} no arquivo .env do frontend e reinicie o servidor.`,
+    );
+  }
 
-interface ApiMeResponse {
-  user?: ApiAuthUser;
-  error?: string;
+  return supabase;
 }
 
 function getStorage(rememberMe = true) {
@@ -61,65 +55,68 @@ function persistSession(session: AuthSession, rememberMe = true) {
   storage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ ...session, rememberMe }));
 }
 
-function normalizeRole(role: ApiAuthUser['role']): AuthUser['role'] {
+function normalizeRole(role?: string | null): AuthUser['role'] {
   return role === 'admin' ? 'admin' : 'user';
 }
 
-function normalizeUser(user: ApiAuthUser): AuthUser {
-  return {
-    id: user.id,
-    email: user.email,
-    name: user.name || user.email || 'Usuário',
-    role: normalizeRole(user.role),
-  };
-}
+function translateAuthError(message?: string) {
+  const normalizedMessage = message?.toLowerCase() ?? '';
 
-async function parseJson<T>(response: Response): Promise<T> {
-  if (response.status === 204) return {} as T;
-  return response.json().catch(() => ({}) as T);
-}
-
-async function apiRequest<T extends { error?: string }>(
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
-  let response: Response;
-
-  try {
-    response = await fetch(`${API_BASE_URL}/api/auth${path}`, {
-      ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        ...init.headers,
-      },
-    });
-  } catch {
-    throw new Error(NETWORK_ERROR_MESSAGE);
+  if (normalizedMessage.includes('invalid login credentials')) {
+    return 'E-mail ou senha inválidos.';
   }
 
-  const data = await parseJson<T>(response);
-
-  if (!response.ok) {
-    throw new Error(data.error || 'Não foi possível completar a solicitação.');
+  if (normalizedMessage.includes('email not confirmed')) {
+    return 'Confirme seu e-mail antes de entrar.';
   }
 
+  if (normalizedMessage.includes('user already registered') || normalizedMessage.includes('already registered')) {
+    return 'Já existe uma conta com este e-mail.';
+  }
+
+  if (normalizedMessage.includes('password')) {
+    return 'A senha não atende aos requisitos mínimos.';
+  }
+
+  if (normalizedMessage.includes('rate limit')) {
+    return 'Muitas tentativas. Aguarde alguns minutos e tente novamente.';
+  }
+
+  return message || 'Não foi possível completar a solicitação.';
+}
+
+async function getProfile(userId: string): Promise<ProfileRow | null> {
+  const client = getSupabaseClient();
+  const { data, error } = await client
+    .from('profiles')
+    .select('full_name, role')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) return null;
   return data;
 }
 
-function createSession(authData: ApiAuthResponse, rememberMe = true): AuthSession {
-  if (!authData.accessToken || !authData.user || !authData.expiresAt) {
-    throw new Error(
-      authData.requiresEmailConfirmation
-        ? 'Conta criada. Confirme seu e-mail antes de entrar.'
-        : 'Não foi possível iniciar a sessão com segurança.',
-    );
-  }
+function buildUser(user: User, profile?: ProfileRow | null): AuthUser {
+  const metadataName =
+    typeof user.user_metadata?.full_name === 'string' ? user.user_metadata.full_name : undefined;
 
   return {
-    user: normalizeUser(authData.user),
-    token: authData.accessToken,
-    refreshToken: authData.refreshToken ?? undefined,
-    expiresAt: authData.expiresAt,
+    id: user.id,
+    email: user.email ?? '',
+    name: profile?.full_name || metadataName || user.email || 'Usuário',
+    role: normalizeRole(profile?.role),
+  };
+}
+
+async function createSession(session: Session, rememberMe = true): Promise<AuthSession> {
+  const profile = await getProfile(session.user.id);
+
+  return {
+    user: buildUser(session.user, profile),
+    token: session.access_token,
+    refreshToken: session.refresh_token,
+    expiresAt: new Date(session.expires_at ? session.expires_at * 1000 : Date.now()).toISOString(),
     rememberMe,
   };
 }
@@ -131,53 +128,72 @@ function isSessionFresh(session: AuthSession) {
 async function refreshStoredSession(session: AuthSession): Promise<AuthSession | null> {
   if (!session.refreshToken) return null;
 
-  const data = await apiRequest<ApiAuthResponse>('/refresh', {
-    method: 'POST',
-    body: JSON.stringify({ refreshToken: session.refreshToken }),
-  });
-  const refreshedSession = createSession(data, session.rememberMe ?? true);
+  const client = getSupabaseClient();
+  const { data, error } = await client.auth.refreshSession({ refresh_token: session.refreshToken });
+
+  if (error || !data.session) return null;
+
+  const refreshedSession = await createSession(data.session, session.rememberMe ?? true);
   persistSession(refreshedSession, refreshedSession.rememberMe);
   return refreshedSession;
 }
 
 export async function signIn(input: SignInInput): Promise<AuthSession> {
+  const client = getSupabaseClient();
   const rememberMe = input.rememberMe ?? true;
-  const data = await apiRequest<ApiAuthResponse>('/login', {
-    method: 'POST',
-    body: JSON.stringify({ email: input.email.trim(), password: input.password }),
+  const { data, error } = await client.auth.signInWithPassword({
+    email: input.email.trim().toLowerCase(),
+    password: input.password,
   });
 
-  const session = createSession(data, rememberMe);
+  if (error || !data.session) {
+    throw new Error(translateAuthError(error?.message));
+  }
+
+  const session = await createSession(data.session, rememberMe);
   persistSession(session, rememberMe);
   return session;
 }
 
 export async function signUp(input: SignUpInput): Promise<AuthSession> {
+  const client = getSupabaseClient();
   const rememberMe = input.rememberMe ?? true;
-  const data = await apiRequest<ApiAuthResponse>('/register', {
-    method: 'POST',
-    body: JSON.stringify({
-      name: input.name.trim(),
-      email: input.email.trim(),
-      password: input.password,
-    }),
+  const name = input.name.trim().replace(/\s+/g, ' ');
+  const email = input.email.trim().toLowerCase();
+
+  if (!name || input.password.length < MIN_PASSWORD_LENGTH) {
+    throw new Error('Informe nome, e-mail válido e senha com pelo menos 8 caracteres.');
+  }
+
+  const { data, error } = await client.auth.signUp({
+    email,
+    password: input.password,
+    options: {
+      data: { full_name: name },
+      emailRedirectTo: `${window.location.origin}/dashboard`,
+    },
   });
 
-  const session = createSession(data, rememberMe);
+  if (error || !data.user) {
+    throw new Error(translateAuthError(error?.message));
+  }
+
+  if (!data.session) {
+    throw new Error('Conta criada. Confirme seu e-mail antes de entrar.');
+  }
+
+  await client
+    .from('profiles')
+    .upsert({ id: data.user.id, full_name: name, role: 'user' }, { onConflict: 'id' });
+
+  const session = await createSession(data.session, rememberMe);
   persistSession(session, rememberMe);
   return session;
 }
 
 export async function signOut(): Promise<void> {
-  const session = await getSession({ validateRemotely: false });
-
-  if (session?.token) {
-    await apiRequest('/logout', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${session.token}` },
-    }).catch(() => undefined);
-  }
-
+  const client = getSupabaseClient();
+  await client.auth.signOut().catch(() => undefined);
   clearSession();
 }
 
@@ -205,19 +221,18 @@ export async function getSession(
       return activeSession;
     }
 
-    const data = await apiRequest<ApiMeResponse>('/me', {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${activeSession.token}` },
-    });
+    const client = getSupabaseClient();
+    const { data, error } = await client.auth.getUser(activeSession.token);
 
-    if (data.user) {
-      const validatedSession = { ...activeSession, user: normalizeUser(data.user) };
-      persistSession(validatedSession, rememberMe);
-      return validatedSession;
+    if (error || !data.user) {
+      clearSession();
+      return null;
     }
 
-    clearSession();
-    return null;
+    const profile = await getProfile(data.user.id);
+    const validatedSession = { ...activeSession, user: buildUser(data.user, profile) };
+    persistSession(validatedSession, rememberMe);
+    return validatedSession;
   } catch {
     clearSession();
     return null;
@@ -225,8 +240,12 @@ export async function getSession(
 }
 
 export async function requestPasswordReset(email: string): Promise<void> {
-  await apiRequest('/password-reset', {
-    method: 'POST',
-    body: JSON.stringify({ email: email.trim() }),
+  const client = getSupabaseClient();
+  const { error } = await client.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+    redirectTo: `${window.location.origin}/forgot-password`,
   });
+
+  if (error) {
+    throw new Error(translateAuthError(error.message));
+  }
 }
