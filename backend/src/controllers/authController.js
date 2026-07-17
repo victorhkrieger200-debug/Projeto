@@ -1,4 +1,9 @@
-import { supabase, supabaseAdmin } from '../lib/supabase.js';
+import {
+  isSupabaseConfigured,
+  missingSupabaseEnvVars,
+  supabase,
+  supabaseAdmin,
+} from '../lib/supabase.js';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 8;
@@ -14,6 +19,17 @@ function normalizeName(name) {
 
 function validateEmail(email) {
   return EMAIL_PATTERN.test(email) && email.length <= 254;
+}
+
+function ensureSupabaseConfigured(res) {
+  if (isSupabaseConfigured) return true;
+
+  res.status(503).json({
+    error: `Autenticação temporariamente indisponível. Configure ${missingSupabaseEnvVars.join(
+      ', ',
+    )} no backend e reinicie o servidor.`,
+  });
+  return false;
 }
 
 function buildUser(authUser, profile = {}) {
@@ -86,6 +102,8 @@ async function getAuthenticatedUser(req) {
 
 export async function login(req, res) {
   try {
+    if (!ensureSupabaseConfigured(res)) return;
+
     const email = normalizeEmail(req.body?.email);
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
 
@@ -113,6 +131,8 @@ export async function login(req, res) {
 
 export async function register(req, res) {
   try {
+    if (!ensureSupabaseConfigured(res)) return;
+
     const name = normalizeName(req.body?.name);
     const email = normalizeEmail(req.body?.email);
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
@@ -165,6 +185,10 @@ export async function register(req, res) {
 
 export async function me(req, res) {
   try {
+
+    if (!ensureSupabaseConfigured(res)) return;
+
+
     const { user, error } = await getAuthenticatedUser(req);
 
     if (error) {
@@ -181,6 +205,10 @@ export async function me(req, res) {
 
 export async function refreshSession(req, res) {
   try {
+
+    if (!ensureSupabaseConfigured(res)) return;
+
+
     const refreshToken = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : '';
 
     if (!refreshToken) {
@@ -205,6 +233,10 @@ export async function refreshSession(req, res) {
 
 export async function logout(req, res) {
   try {
+
+    if (!ensureSupabaseConfigured(res)) return;
+
+
     const token = getBearerToken(req);
 
     if (token) {
@@ -224,6 +256,8 @@ export async function logout(req, res) {
 
 export async function requestPasswordReset(req, res) {
   try {
+    if (!ensureSupabaseConfigured(res)) return;
+
     const email = normalizeEmail(req.body?.email);
 
     if (!validateEmail(email)) {
