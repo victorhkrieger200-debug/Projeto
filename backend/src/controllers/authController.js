@@ -37,11 +37,11 @@ export async function login(req, res) {
       .maybeSingle();
 
     if (profileError) {
-      return res.status(500).json({ error: 'Não foi possível carregar o perfil do usuário.' });
+      console.warn('Profile lookup failed during login:', profileError.message);
     }
 
     return res.status(200).json({
-      user: buildUser(authData.user, profileData),
+      user: buildUser(authData.user, profileError ? null : profileData),
       accessToken: authData.session.access_token,
       refreshToken: authData.session.refresh_token,
       expiresAt: new Date(authData.session.expires_at * 1000).toISOString(),
@@ -69,7 +69,9 @@ export async function register(req, res) {
     });
 
     if (authError || !authData.user) {
-      return res.status(400).json({ error: authError?.message || 'Não foi possível criar a conta.' });
+      return res
+        .status(400)
+        .json({ error: authError?.message || 'Não foi possível criar a conta.' });
     }
 
     const { error: profileError } = await supabaseAdmin
@@ -77,7 +79,7 @@ export async function register(req, res) {
       .upsert({ id: authData.user.id, full_name: name, role: 'user' }, { onConflict: 'id' });
 
     if (profileError) {
-      return res.status(500).json({ error: 'Conta criada, mas não foi possível salvar o perfil.' });
+      console.warn('Profile upsert failed during registration:', profileError.message);
     }
 
     return res.status(201).json({

@@ -1,24 +1,31 @@
 import { createClient } from '@supabase/supabase-js';
 
+const rawSupabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const rawSupabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
+const supabaseUrl = rawSupabaseUrl?.trim().replace(/\/$/, '') ?? '';
+const supabaseAnonKey = rawSupabaseAnonKey?.trim() ?? '';
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY no frontend/.env.');
-}
+export const missingSupabaseEnvVars = [
+  !supabaseUrl ? 'VITE_SUPABASE_URL' : undefined,
+  !supabaseAnonKey ? 'VITE_SUPABASE_ANON_KEY' : undefined,
+].filter(Boolean) as string[];
 
+export const isSupabaseConfigured = missingSupabaseEnvVars.length === 0;
 
-export const supabaseConfig = {
-  url: supabaseUrl.replace(/\/$/, ''),
-  anonKey: supabaseAnonKey,
-};
+export const supabaseConfig = isSupabaseConfigured
+  ? {
+      url: supabaseUrl,
+      anonKey: supabaseAnonKey,
+    }
+  : null;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-    persistSession: false,
-  },
-});
-
+export const supabase = isSupabaseConfigured
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+        persistSession: false,
+      },
+    })
+  : null;

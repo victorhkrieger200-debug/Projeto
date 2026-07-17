@@ -52,20 +52,32 @@ function normalizeRole(role: ProfileRow['role']): AuthUser['role'] {
   return role === 'admin' ? 'admin' : 'user';
 }
 
+function assertSupabaseConfigured() {
+  if (!supabaseConfig) {
+    throw new Error('Autenticação indisponível no momento. Tente novamente mais tarde.');
+  }
+
+  return supabaseConfig;
+}
+
 function getAuthErrorMessage(data: SupabaseAuthResponse, fallback: string) {
   return data.error_description || data.msg || data.error || fallback;
 }
 
 async function parseJson<T>(response: Response): Promise<T> {
   if (response.status === 204) return {} as T;
-  return response.json().catch(() => ({} as T));
+  return response.json().catch(() => ({}) as T);
 }
 
-async function supabaseAuthRequest<T extends SupabaseAuthResponse>(path: string, init: RequestInit): Promise<T> {
-  const response = await fetch(`${supabaseConfig.url}/auth/v1${path}`, {
+async function supabaseAuthRequest<T extends SupabaseAuthResponse>(
+  path: string,
+  init: RequestInit,
+): Promise<T> {
+  const config = assertSupabaseConfigured();
+  const response = await fetch(`${config.url}/auth/v1${path}`, {
     ...init,
     headers: {
-      apikey: supabaseConfig.anonKey,
+      apikey: config.anonKey,
       'Content-Type': 'application/json',
       ...init.headers,
     },
@@ -79,11 +91,16 @@ async function supabaseAuthRequest<T extends SupabaseAuthResponse>(path: string,
   return data;
 }
 
-async function supabaseRestRequest<T>(path: string, accessToken: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(`${supabaseConfig.url}/rest/v1${path}`, {
+async function supabaseRestRequest<T>(
+  path: string,
+  accessToken: string,
+  init: RequestInit = {},
+): Promise<T> {
+  const config = assertSupabaseConfigured();
+  const response = await fetch(`${config.url}/rest/v1${path}`, {
     ...init,
     headers: {
-      apikey: supabaseConfig.anonKey,
+      apikey: config.anonKey,
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
       ...init.headers,
@@ -92,19 +109,23 @@ async function supabaseRestRequest<T>(path: string, accessToken: string, init: R
   const data = await parseJson<T>(response);
 
   if (!response.ok) {
-    throw new Error('Login validado, mas não foi possível sincronizar o perfil do usuário.');
+    throw new Error('Não foi possível completar a solicitação.');
   }
 
   return data;
 }
 
 async function getProfile(userId: string, accessToken: string): Promise<ProfileRow | null> {
-  const data = await supabaseRestRequest<ProfileRow[]>(
-    `/profiles?select=id,full_name,role&id=eq.${encodeURIComponent(userId)}&limit=1`,
-    accessToken,
-  );
+  try {
+    const data = await supabaseRestRequest<ProfileRow[]>(
+      `/profiles?select=id,full_name,role&id=eq.${encodeURIComponent(userId)}&limit=1`,
+      accessToken,
+    );
 
-  return data[0] ?? null;
+    return data[0] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 async function upsertProfile(userId: string, fullName: string, accessToken: string) {
@@ -114,7 +135,7 @@ async function upsertProfile(userId: string, fullName: string, accessToken: stri
       Prefer: 'resolution=merge-duplicates',
     },
     body: JSON.stringify({ id: userId, full_name: fullName, role: 'user' }),
-  });
+  }).catch(() => undefined);
 }
 
 async function createSession(authData: SupabaseAuthResponse): Promise<AuthSession> {
@@ -128,7 +149,11 @@ async function createSession(authData: SupabaseAuthResponse): Promise<AuthSessio
     user: {
       id: authData.user.id,
       email: authData.user.email ?? '',
-      name: profile?.full_name || authData.user.user_metadata?.full_name || authData.user.email || 'Usuário',
+      name:
+        profile?.full_name ||
+        authData.user.user_metadata?.full_name ||
+        authData.user.email ||
+        'Usuário',
       role: normalizeRole(profile?.role ?? null),
     },
     token: authData.access_token,
@@ -190,7 +215,9 @@ export async function signOut(): Promise<void> {
 export async function getSession(): Promise<AuthSession | null> {
   if (typeof window === 'undefined') return null;
 
-  const raw = window.localStorage.getItem(SESSION_STORAGE_KEY) ?? window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+  const raw =
+    window.localStorage.getItem(SESSION_STORAGE_KEY) ??
+    window.sessionStorage.getItem(SESSION_STORAGE_KEY);
   if (!raw) return null;
 
   try {

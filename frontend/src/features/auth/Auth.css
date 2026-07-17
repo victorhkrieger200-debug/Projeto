@@ -43,7 +43,7 @@
 
 .left::before,
 .left::after {
-  content: "";
+  content: '';
   position: absolute;
   border-radius: 50%;
   filter: blur(140px);
@@ -289,7 +289,10 @@
   width: 0;
   opacity: 0;
   transform: translateX(-6px);
-  transition: width var(--auth-ease-normal), opacity var(--auth-ease-normal), transform var(--auth-ease-normal);
+  transition:
+    width var(--auth-ease-normal),
+    opacity var(--auth-ease-normal),
+    transform var(--auth-ease-normal);
 }
 
 .google:hover .arrow-icon {
@@ -311,7 +314,7 @@
 
 .divider::before,
 .divider::after {
-  content: "";
+  content: '';
   flex: 1;
   height: 1px;
   background: rgba(15, 23, 42, 0.06);
@@ -352,7 +355,10 @@
   font-size: 0.9rem;
   font-weight: 500;
   box-sizing: border-box;
-  transition: border-color var(--auth-ease-normal), box-shadow var(--auth-ease-normal), background-color var(--auth-ease-normal);
+  transition:
+    border-color var(--auth-ease-normal),
+    box-shadow var(--auth-ease-normal),
+    background-color var(--auth-ease-normal);
 }
 
 .input-icon {
@@ -386,7 +392,7 @@
   border-color: var(--dynamic-focus-color, var(--auth-border-focus));
   box-shadow: 0 0 0 3px var(--dynamic-glow-color, var(--auth-primary-glow));
   background-color: #ffffff;
-  outline: none; 
+  outline: none;
 }
 
 .input-wrapper.has-error input {
@@ -422,7 +428,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color var(--auth-ease-normal), transform 0.1s ease;
+  transition:
+    color var(--auth-ease-normal),
+    transform 0.1s ease;
   cursor: pointer;
   padding: 0;
 }
@@ -438,7 +446,9 @@
 .expandable-field {
   display: grid;
   grid-template-rows: 0fr;
-  transition: grid-template-rows var(--auth-ease-smooth), margin-bottom var(--auth-ease-smooth);
+  transition:
+    grid-template-rows var(--auth-ease-smooth),
+    margin-bottom var(--auth-ease-smooth);
   overflow: hidden;
   margin-bottom: 0;
   width: 100%;
@@ -479,7 +489,7 @@
   user-select: none;
 }
 
-.remember-me input[type="checkbox"] {
+.remember-me input[type='checkbox'] {
   width: 15px;
   height: 15px;
   accent-color: var(--auth-primary);
@@ -511,7 +521,9 @@
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  transition: background-color var(--auth-ease-normal), transform var(--auth-ease-normal);
+  transition:
+    background-color var(--auth-ease-normal),
+    transform var(--auth-ease-normal);
   position: relative;
   overflow: hidden;
   border: none;
@@ -571,7 +583,9 @@
 .strength-container {
   display: grid;
   grid-template-rows: 0fr;
-  transition: grid-template-rows var(--auth-ease-smooth), margin-top var(--auth-ease-smooth);
+  transition:
+    grid-template-rows var(--auth-ease-smooth),
+    margin-top var(--auth-ease-smooth);
   overflow: hidden;
   margin-top: 0;
 }
@@ -614,7 +628,9 @@
   height: 100%;
   border-radius: 99px;
   background: #e2e8f0;
-  transition: background-color 0.35s ease, transform 0.2s ease;
+  transition:
+    background-color 0.35s ease,
+    transform 0.2s ease;
 }
 
 .strength-bar.active {
@@ -653,7 +669,8 @@
   color: var(--auth-text-main);
 }
 
-.req-icon circle, .req-icon path {
+.req-icon circle,
+.req-icon path {
   transition: all var(--auth-ease-normal);
 }
 
@@ -727,21 +744,42 @@ input:focus-visible {
 }
 
 @keyframes authElasticShake {
-  0%, 100% { transform: translateX(0); }
-  20% { transform: translateX(-4px); }
-  40% { transform: translateX(4px); }
-  60% { transform: translateX(-2px); }
-  80% { transform: translateX(2px); }
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-4px);
+  }
+  40% {
+    transform: translateX(4px);
+  }
+  60% {
+    transform: translateX(-2px);
+  }
+  80% {
+    transform: translateX(2px);
+  }
 }
 
 @keyframes popIn {
-  0% { transform: scale(0.5); opacity: 0; }
-  100% { transform: scale(1); opacity: 1; }
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 @keyframes floatOrb {
-  0% { transform: translateY(0) scale(1); }
-  100% { transform: translateY(-30px) scale(1.05); }
+  0% {
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    transform: translateY(-30px) scale(1.05);
+  }
 }
 
 @media (max-width: 1024px) {
@@ -770,12 +808,14 @@ input:focus-visible {
     display: flex !important;
     justify-content: flex-start;
     align-items: center;
-    background: radial-gradient(circle at top left, rgba(37, 99, 235, 0.2), transparent 40%),
-                radial-gradient(circle at bottom right, rgba(30, 58, 138, 0.2), transparent 50%),
-                var(--auth-bg-dark);
+    background:
+      radial-gradient(circle at top left, rgba(37, 99, 235, 0.2), transparent 40%),
+      radial-gradient(circle at bottom right, rgba(30, 58, 138, 0.2), transparent 50%),
+      var(--auth-bg-dark);
   }
 
-  .left::before, .left::after {
+  .left::before,
+  .left::after {
     filter: blur(80px);
     opacity: 0.15;
   }
@@ -795,7 +835,7 @@ input:focus-visible {
   .left .hero h1 {
     font-size: 2rem;
   }
-  
+
   .left .hero p {
     font-size: 0.9rem;
     color: rgba(255, 255, 255, 0.65);
@@ -834,7 +874,7 @@ input:focus-visible {
   .left {
     height: 30%;
   }
-  
+
   .left .hero p {
     display: none;
   }
@@ -876,10 +916,21 @@ input:focus-visible {
   animation: dash 1.5s ease-in-out infinite;
 }
 @keyframes rotate {
-  100% { transform: rotate(360deg); }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 @keyframes dash {
-  0% { stroke-dasharray: 1, 150; stroke-dashoffset: 0; }
-  50% { stroke-dasharray: 90, 150; stroke-dashoffset: -35; }
-  100% { stroke-dasharray: 90, 150; stroke-dashoffset: -124; }
+  0% {
+    stroke-dasharray: 1, 150;
+    stroke-dashoffset: 0;
+  }
+  50% {
+    stroke-dasharray: 90, 150;
+    stroke-dashoffset: -35;
+  }
+  100% {
+    stroke-dasharray: 90, 150;
+    stroke-dashoffset: -124;
+  }
 }
