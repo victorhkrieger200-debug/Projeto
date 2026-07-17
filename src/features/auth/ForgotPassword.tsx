@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef, useId } from "react";
-import { Link } from "react-router-dom";
-import "./Auth.css";
+import React, { useState, useEffect, useRef, useId } from 'react';
+import { Link } from 'react-router-dom';
+import { useAuth } from '@/hooks/useAuth';
+import './Auth.css';
 
 interface FieldErrors {
   email?: string;
@@ -36,7 +37,8 @@ const SuccessBadgeIcon = () => (
 );
 
 function ForgotPassword() {
-  const [email, setEmail] = useState("");
+  const { requestPasswordReset } = useAuth();
+  const [email, setEmail] = useState('');
   const [formState, setFormState] = useState<"idle" | "loading" | "success">("idle");
   const [isShaking, setIsShaking] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -80,7 +82,7 @@ function ForgotPassword() {
     emailInputRef.current?.focus();
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const emailError = validateEmail(email);
@@ -92,12 +94,18 @@ function ForgotPassword() {
       return;
     }
 
-    setFormState("loading");
+    setFormState('loading');
 
-    const tId = window.setTimeout(() => {
-      setFormState("success");
-    }, 1600);
-    timeoutsRef.current.push(tId);
+    try {
+      await requestPasswordReset(email);
+      window.setTimeout(() => {
+        setFormState('success');
+      }, 900);
+    } catch (error) {
+      setFormState('idle');
+      setErrors({ email: error instanceof Error ? error.message : 'Não foi possível enviar o e-mail.' });
+      triggerShake();
+    }
   };
 
   return (

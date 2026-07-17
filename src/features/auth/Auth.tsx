@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef, useId } from "react";
-import { Link } from "react-router-dom";
-import "./Auth.css";
+import React, { useState, useEffect, useRef, useId } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '@/hooks/useAuth';
+import './Auth.css';
 
 type FormMode = "signin" | "signup";
 
@@ -68,7 +69,9 @@ const XIcon = () => (
 );
 
 function Auth() {
-  const [mode, setMode] = useState<FormMode>("signin");
+  const navigate = useNavigate();
+  const { signIn, signUp, isAuthenticated } = useAuth();
+  const [mode, setMode] = useState<FormMode>('signin');
   const [showPassword, setShowPassword] = useState(false);
   const [formState, setFormState] = useState<"idle" | "loading" | "success">("idle");
   const [shakingFields, setShakingFields] = useState<{ [k: string]: boolean }>({});
@@ -101,9 +104,15 @@ function Auth() {
   const passwordErrorId = `${uid}-password-error`;
   const nameErrorId = `${uid}-name-error`;
 
-  const isSignin = mode === "signin";
-  const isLoading = formState === "loading";
-  const isSuccess = formState === "success";
+  const isSignin = mode === 'signin';
+  const isLoading = formState === 'loading';
+  const isSuccess = formState === 'success';
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate('/dashboard');
+    }
+  }, [isAuthenticated, navigate]);
 
   useEffect(() => {
     return () => {
@@ -185,7 +194,7 @@ function Auth() {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     const emailError = validateEmail(email);
@@ -195,27 +204,33 @@ function Auth() {
     setErrors({ email: emailError, password: passwordError, name: nameError });
     setTouched({ name: true, email: true, password: true });
 
-    if (nameError) triggerShake("name");
-    if (emailError) triggerShake("email");
-    if (passwordError) triggerShake("password");
+    if (nameError) triggerShake('name');
+    if (emailError) triggerShake('email');
+    if (passwordError) triggerShake('password');
 
     if (emailError || passwordError || nameError) return;
 
-    setFormState("loading");
+    setFormState('loading');
 
-    const tId1 = window.setTimeout(() => {
-      setFormState("success");
-      const tId2 = window.setTimeout(() => {
-        if (isSignin) {
-          console.log("Realizando Login:", { email, password, rememberMe });
-        } else {
-          console.log("Realizando Cadastro:", { name, email, password });
-        }
-        setFormState("idle");
-      }, 1500);
-      timeoutsRef.current.push(tId2);
-    }, 1500);
-    timeoutsRef.current.push(tId1);
+    try {
+      if (isSignin) {
+        await signIn({ email, password, rememberMe });
+      } else {
+        await signUp({ name, email, password, rememberMe });
+      }
+
+      setFormState('success');
+      window.setTimeout(() => {
+        navigate('/dashboard');
+      }, 800);
+    } catch (error) {
+      setFormState('idle');
+      setErrors((prev) => ({
+        ...prev,
+        email: error instanceof Error ? error.message : 'Não foi possível concluir a operação.',
+      }));
+      triggerShake('email');
+    }
   };
 
   return (
