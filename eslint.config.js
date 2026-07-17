@@ -9,6 +9,14 @@ export default tseslint.config(
   { ignores: ['dist'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+
+  {
+    files: ['backend/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      globals: globals.node,
+    },
+  },
   {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
