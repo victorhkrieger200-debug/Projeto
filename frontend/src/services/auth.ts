@@ -54,9 +54,13 @@ function normalizeRole(role: ProfileRow['role']): AuthUser['role'] {
 
 function assertSupabaseConfigured() {
   if (!supabaseConfig) {
+
+    throw new Error('Autenticação indisponível no momento. Tente novamente mais tarde.');
+
     throw new Error(
       `Configure ${missingSupabaseEnvVars.join(' e ')} no arquivo frontend/.env para habilitar a autenticação.`,
     );
+
   }
 
   return supabaseConfig;
@@ -111,19 +115,23 @@ async function supabaseRestRequest<T>(
   const data = await parseJson<T>(response);
 
   if (!response.ok) {
-    throw new Error('Login validado, mas não foi possível sincronizar o perfil do usuário.');
+    throw new Error('Não foi possível completar a solicitação.');
   }
 
   return data;
 }
 
 async function getProfile(userId: string, accessToken: string): Promise<ProfileRow | null> {
-  const data = await supabaseRestRequest<ProfileRow[]>(
-    `/profiles?select=id,full_name,role&id=eq.${encodeURIComponent(userId)}&limit=1`,
-    accessToken,
-  );
+  try {
+    const data = await supabaseRestRequest<ProfileRow[]>(
+      `/profiles?select=id,full_name,role&id=eq.${encodeURIComponent(userId)}&limit=1`,
+      accessToken,
+    );
 
-  return data[0] ?? null;
+    return data[0] ?? null;
+  } catch {
+    return null;
+  }
 }
 
 async function upsertProfile(userId: string, fullName: string, accessToken: string) {
@@ -133,7 +141,7 @@ async function upsertProfile(userId: string, fullName: string, accessToken: stri
       Prefer: 'resolution=merge-duplicates',
     },
     body: JSON.stringify({ id: userId, full_name: fullName, role: 'user' }),
-  });
+  }).catch(() => undefined);
 }
 
 async function createSession(authData: SupabaseAuthResponse): Promise<AuthSession> {

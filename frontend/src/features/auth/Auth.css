@@ -934,6 +934,7 @@ input:focus-visible {
     stroke-dashoffset: -124;
   }
 }
+
 .config-alert {
   display: grid;
   gap: 0.35rem;
@@ -961,3 +962,4 @@ input:focus-visible {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
   font-size: 0.75rem;
 }
+
