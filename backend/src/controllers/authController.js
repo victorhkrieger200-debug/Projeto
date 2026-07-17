@@ -1,23 +1,64 @@
 import { supabase, supabaseAdmin } from '../lib/supabase.js';
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MIN_PASSWORD_LENGTH = 8;
+const MAX_NAME_LENGTH = 120;
+
+function normalizeEmail(email) {
+  return typeof email === 'string' ? email.trim().toLowerCase() : '';
+}
+
+function normalizeName(name) {
+  return typeof name === 'string' ? name.trim().replace(/\s+/g, ' ').slice(0, MAX_NAME_LENGTH) : '';
+}
+
+function validateEmail(email) {
+  return EMAIL_PATTERN.test(email) && email.length <= 254;
+}
+
 function buildUser(authUser, profile = {}) {
   return {
     id: authUser.id,
     email: authUser.email,
-    name: profile.full_name || authUser.user_metadata?.full_name || authUser.email,
-    role: profile.role || 'user',
+    name: profile?.full_name || authUser.user_metadata?.full_name || authUser.email,
+    role: profile?.role === 'admin' ? 'admin' : 'user',
   };
 }
 
 function getPublicAppUrl(req) {
-  return process.env.PUBLIC_APP_URL || req.headers.origin || 'http://localhost:5173';
+  const configuredUrl = process.env.PUBLIC_APP_URL?.trim().replace(/\/$/, '');
+  return configuredUrl || req.headers.origin || 'http://localhost:5173';
+}
+
+function safeLog(message, error) {
+  console.error(message, {
+    code: error?.code,
+    status: error?.status,
+    name: error?.name,
+  });
+}
+
+async function getProfile(userId) {
+  const { data, error } = await supabaseAdmin
+    .from('profiles')
+    .select('id, full_name, role')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (error) {
+    safeLog('Falha ao consultar perfil.', error);
+    return null;
+  }
+
+  return data;
 }
 
 export async function login(req, res) {
   try {
-    const { email, password } = req.body || {};
+    const email = normalizeEmail(req.body?.email);
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
 
-    if (!email || !password) {
+    if (!validateEmail(email) || !password) {
       return res.status(400).json({ error: 'E-mail e senha são obrigatórios.' });
     }
 
@@ -27,36 +68,33 @@ export async function login(req, res) {
     });
 
     if (authError || !authData.user || !authData.session) {
-      return res.status(401).json({ error: authError?.message || 'Credenciais inválidas.' });
+      return res.status(401).json({ error: 'Credenciais inválidas.' });
     }
 
-    const { data: profileData, error: profileError } = await supabaseAdmin
-      .from('profiles')
-      .select('id, full_name, role')
-      .eq('id', authData.user.id)
-      .maybeSingle();
-
-    if (profileError) {
-      console.warn('Profile lookup failed during login:', profileError.message);
-    }
+    const profile = await getProfile(authData.user.id);
 
     return res.status(200).json({
-      user: buildUser(authData.user, profileError ? null : profileData),
+      user: buildUser(authData.user, profile),
       accessToken: authData.session.access_token,
       refreshToken: authData.session.refresh_token,
       expiresAt: new Date(authData.session.expires_at * 1000).toISOString(),
     });
   } catch (error) {
-    return res.status(500).json({ error: error.message || 'Erro interno do servidor.' });
+    safeLog('Erro inesperado no login.', error);
+    return res.status(500).json({ error: 'Erro interno do servidor.' });
   }
 }
 
 export async function register(req, res) {
   try {
-    const { name, email, password } = req.body || {};
+    const name = normalizeName(req.body?.name);
+    const email = normalizeEmail(req.body?.email);
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
 
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: 'Nome, e-mail e senha são obrigatórios.' });
+    if (!name || !validateEmail(email) || password.length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({
+        error: 'Informe nome, e-mail válido e senha com pelo menos 8 caracteres.',
+      });
     }
 
     const { data: authData, error: authError } = await supabase.auth.signUp({
@@ -69,9 +107,8 @@ export async function register(req, res) {
     });
 
     if (authError || !authData.user) {
-      return res
-        .status(400)
-        .json({ error: authError?.message || 'Não foi possível criar a conta.' });
+      safeLog('Falha ao criar usuário no provedor de autenticação.', authError);
+      return res.status(400).json({ error: 'Não foi possível criar a conta.' });
     }
 
     const { error: profileError } = await supabaseAdmin
@@ -79,7 +116,8 @@ export async function register(req, res) {
       .upsert({ id: authData.user.id, full_name: name, role: 'user' }, { onConflict: 'id' });
 
     if (profileError) {
-      console.warn('Profile upsert failed during registration:', profileError.message);
+      safeLog('Falha ao sincronizar perfil após cadastro.', profileError);
+      return res.status(500).json({ error: 'Conta criada, mas o perfil não foi sincronizado.' });
     }
 
     return res.status(201).json({
@@ -92,15 +130,16 @@ export async function register(req, res) {
       requiresEmailConfirmation: !authData.session,
     });
   } catch (error) {
-    return res.status(500).json({ error: error.message || 'Erro interno do servidor.' });
+    safeLog('Erro inesperado no cadastro.', error);
+    return res.status(500).json({ error: 'Erro interno do servidor.' });
   }
 }
 
 export async function requestPasswordReset(req, res) {
   try {
-    const { email } = req.body || {};
+    const email = normalizeEmail(req.body?.email);
 
-    if (!email) {
+    if (!validateEmail(email)) {
       return res.status(400).json({ error: 'E-mail é obrigatório.' });
     }
 
@@ -109,11 +148,12 @@ export async function requestPasswordReset(req, res) {
     });
 
     if (error) {
-      return res.status(400).json({ error: error.message || 'Não foi possível enviar o e-mail.' });
+      safeLog('Falha ao solicitar redefinição de senha.', error);
     }
 
     return res.status(204).send();
   } catch (error) {
-    return res.status(500).json({ error: error.message || 'Erro interno do servidor.' });
+    safeLog('Erro inesperado na redefinição de senha.', error);
+    return res.status(500).json({ error: 'Erro interno do servidor.' });
   }
 }

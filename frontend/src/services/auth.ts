@@ -1,31 +1,24 @@
-import { missingSupabaseEnvVars, supabaseConfig } from '@/lib/supabase';
-import type { AuthSession, AuthUser, SignInInput, SignUpInput } from '@/types/auth';
+import type { AuthSession, SignInInput, SignUpInput } from '@/types/auth';
 
 const SESSION_STORAGE_KEY = 'atlhon-auth-session';
+const API_BASE_URL =
+  (import.meta.env.VITE_API_URL as string | undefined)?.trim().replace(/\/$/, '') ||
+  'http://localhost:4000';
 
-interface SupabaseAuthUser {
+interface ApiAuthUser {
   id: string;
-  email?: string;
-  user_metadata?: {
-    full_name?: string;
-  };
+  email: string;
+  name: string;
+  role: 'admin' | 'user' | string;
 }
 
-interface SupabaseAuthResponse {
-  access_token?: string;
-  refresh_token?: string;
-  expires_at?: number;
-  expires_in?: number;
-  user?: SupabaseAuthUser;
-  msg?: string;
+interface ApiAuthResponse {
+  user?: ApiAuthUser;
+  accessToken?: string | null;
+  refreshToken?: string | null;
+  expiresAt?: string | null;
+  requiresEmailConfirmation?: boolean;
   error?: string;
-  error_description?: string;
-}
-
-interface ProfileRow {
-  id: string;
-  full_name: string | null;
-  role: 'admin' | 'user' | string | null;
 }
 
 function getStorage(rememberMe = true) {
@@ -48,26 +41,8 @@ function persistSession(session: AuthSession, rememberMe = true) {
   storage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
 }
 
-function normalizeRole(role: ProfileRow['role']): AuthUser['role'] {
+function normalizeRole(role: ApiAuthUser['role']): AuthSession['user']['role'] {
   return role === 'admin' ? 'admin' : 'user';
-}
-
-function assertSupabaseConfigured() {
-  if (!supabaseConfig) {
-
-    throw new Error('Autenticação indisponível no momento. Tente novamente mais tarde.');
-
-    throw new Error(
-      `Configure ${missingSupabaseEnvVars.join(' e ')} no arquivo frontend/.env para habilitar a autenticação.`,
-    );
-
-  }
-
-  return supabaseConfig;
-}
-
-function getAuthErrorMessage(data: SupabaseAuthResponse, fallback: string) {
-  return data.error_description || data.msg || data.error || fallback;
 }
 
 async function parseJson<T>(response: Response): Promise<T> {
@@ -75,15 +50,10 @@ async function parseJson<T>(response: Response): Promise<T> {
   return response.json().catch(() => ({}) as T);
 }
 
-async function supabaseAuthRequest<T extends SupabaseAuthResponse>(
-  path: string,
-  init: RequestInit,
-): Promise<T> {
-  const config = assertSupabaseConfigured();
-  const response = await fetch(`${config.url}/auth/v1${path}`, {
+async function apiRequest<T extends ApiAuthResponse>(path: string, init: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}/api/auth${path}`, {
     ...init,
     headers: {
-      apikey: config.anonKey,
       'Content-Type': 'application/json',
       ...init.headers,
     },
@@ -91,130 +61,61 @@ async function supabaseAuthRequest<T extends SupabaseAuthResponse>(
   const data = await parseJson<T>(response);
 
   if (!response.ok) {
-    throw new Error(getAuthErrorMessage(data, 'Não foi possível completar a solicitação.'));
+    throw new Error(data.error || 'Não foi possível completar a solicitação.');
   }
 
   return data;
 }
 
-async function supabaseRestRequest<T>(
-  path: string,
-  accessToken: string,
-  init: RequestInit = {},
-): Promise<T> {
-  const config = assertSupabaseConfigured();
-  const response = await fetch(`${config.url}/rest/v1${path}`, {
-    ...init,
-    headers: {
-      apikey: config.anonKey,
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      ...init.headers,
-    },
-  });
-  const data = await parseJson<T>(response);
-
-  if (!response.ok) {
-    throw new Error('Não foi possível completar a solicitação.');
-  }
-
-  return data;
-}
-
-async function getProfile(userId: string, accessToken: string): Promise<ProfileRow | null> {
-  try {
-    const data = await supabaseRestRequest<ProfileRow[]>(
-      `/profiles?select=id,full_name,role&id=eq.${encodeURIComponent(userId)}&limit=1`,
-      accessToken,
+function createSession(authData: ApiAuthResponse): AuthSession {
+  if (!authData.accessToken || !authData.user || !authData.expiresAt) {
+    throw new Error(
+      authData.requiresEmailConfirmation
+        ? 'Conta criada. Confirme seu e-mail antes de entrar.'
+        : 'Não foi possível iniciar a sessão com segurança.',
     );
-
-    return data[0] ?? null;
-  } catch {
-    return null;
   }
-}
-
-async function upsertProfile(userId: string, fullName: string, accessToken: string) {
-  await supabaseRestRequest('/profiles', accessToken, {
-    method: 'POST',
-    headers: {
-      Prefer: 'resolution=merge-duplicates',
-    },
-    body: JSON.stringify({ id: userId, full_name: fullName, role: 'user' }),
-  }).catch(() => undefined);
-}
-
-async function createSession(authData: SupabaseAuthResponse): Promise<AuthSession> {
-  if (!authData.access_token || !authData.user) {
-    throw new Error('O Supabase não retornou uma sessão válida.');
-  }
-
-  const profile = await getProfile(authData.user.id, authData.access_token);
 
   return {
     user: {
       id: authData.user.id,
-      email: authData.user.email ?? '',
-      name:
-        profile?.full_name ||
-        authData.user.user_metadata?.full_name ||
-        authData.user.email ||
-        'Usuário',
-      role: normalizeRole(profile?.role ?? null),
+      email: authData.user.email,
+      name: authData.user.name || authData.user.email || 'Usuário',
+      role: normalizeRole(authData.user.role),
     },
-    token: authData.access_token,
-    refreshToken: authData.refresh_token,
-    expiresAt: new Date(
-      (authData.expires_at ?? Math.floor(Date.now() / 1000) + (authData.expires_in ?? 3600)) * 1000,
-    ).toISOString(),
+    token: authData.accessToken,
+    refreshToken: authData.refreshToken ?? undefined,
+    expiresAt: authData.expiresAt,
   };
 }
 
 export async function signIn(input: SignInInput): Promise<AuthSession> {
-  const data = await supabaseAuthRequest<SupabaseAuthResponse>('/token?grant_type=password', {
+  const data = await apiRequest('/login', {
     method: 'POST',
     body: JSON.stringify({ email: input.email.trim(), password: input.password }),
   });
 
-  const session = await createSession(data);
+  const session = createSession(data);
   persistSession(session, input.rememberMe ?? true);
   return session;
 }
 
 export async function signUp(input: SignUpInput): Promise<AuthSession> {
-  const fullName = input.name.trim();
-  const data = await supabaseAuthRequest<SupabaseAuthResponse>('/signup', {
+  const data = await apiRequest('/register', {
     method: 'POST',
     body: JSON.stringify({
+      name: input.name.trim(),
       email: input.email.trim(),
       password: input.password,
-      data: { full_name: fullName },
-      gotrue_meta_security: {},
     }),
   });
 
-  if (!data.access_token || !data.user) {
-    throw new Error('Conta criada. Confirme seu e-mail antes de entrar.');
-  }
-
-  await upsertProfile(data.user.id, fullName, data.access_token);
-  const session = await createSession(data);
+  const session = createSession(data);
   persistSession(session, input.rememberMe ?? true);
   return session;
 }
 
 export async function signOut(): Promise<void> {
-  const currentSession = await getSession();
-
-  if (currentSession?.token) {
-    await supabaseAuthRequest('/logout', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${currentSession.token}`,
-      },
-    }).catch(() => undefined);
-  }
-
   clearSession();
 }
 
@@ -242,11 +143,8 @@ export async function getSession(): Promise<AuthSession | null> {
 }
 
 export async function requestPasswordReset(email: string): Promise<void> {
-  await supabaseAuthRequest('/recover', {
+  await apiRequest('/password-reset', {
     method: 'POST',
-    body: JSON.stringify({
-      email: email.trim(),
-      redirect_to: `${window.location.origin}/forgot-password`,
-    }),
+    body: JSON.stringify({ email: email.trim() }),
   });
 }
