@@ -10,6 +10,7 @@ export interface AuthSession {
   token: string;
   refreshToken?: string;
   expiresAt: string;
+  rememberMe?: boolean;
 }
 
 export interface SignInInput {
