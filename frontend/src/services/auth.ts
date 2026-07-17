@@ -1,9 +1,12 @@
-import type { AuthSession, SignInInput, SignUpInput } from '@/types/auth';
+import type { AuthSession, AuthUser, SignInInput, SignUpInput } from '@/types/auth';
 
 const SESSION_STORAGE_KEY = 'atlhon-auth-session';
+const EXPIRATION_SAFETY_WINDOW_MS = 60_000;
 const API_BASE_URL =
   (import.meta.env.VITE_API_URL as string | undefined)?.trim().replace(/\/$/, '') ||
   'http://localhost:4000';
+const NETWORK_ERROR_MESSAGE =
+  'Não foi possível conectar ao backend de autenticação. Inicie o projeto com `npm run dev` na raiz, confirme que o backend está rodando em http://localhost:4000 e confira as variáveis SUPABASE_URL, SUPABASE_ANON_KEY e SUPABASE_SERVICE_ROLE_KEY.';
 
 interface ApiAuthUser {
   id: string;
@@ -21,6 +24,11 @@ interface ApiAuthResponse {
   error?: string;
 }
 
+interface ApiMeResponse {
+  user?: ApiAuthUser;
+  error?: string;
+}
+
 function getStorage(rememberMe = true) {
   if (typeof window === 'undefined') return null;
   return rememberMe ? window.localStorage : window.sessionStorage;
@@ -33,16 +41,37 @@ function clearSession() {
   window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
 }
 
+function getStoredSessionLocation() {
+  if (typeof window === 'undefined') return null;
+
+  const localRaw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+  if (localRaw) return { raw: localRaw, rememberMe: true };
+
+  const sessionRaw = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
+  if (sessionRaw) return { raw: sessionRaw, rememberMe: false };
+
+  return null;
+}
+
 function persistSession(session: AuthSession, rememberMe = true) {
   const storage = getStorage(rememberMe);
   if (!storage) return;
 
   clearSession();
-  storage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  storage.setItem(SESSION_STORAGE_KEY, JSON.stringify({ ...session, rememberMe }));
 }
 
-function normalizeRole(role: ApiAuthUser['role']): AuthSession['user']['role'] {
+function normalizeRole(role: ApiAuthUser['role']): AuthUser['role'] {
   return role === 'admin' ? 'admin' : 'user';
+}
+
+function normalizeUser(user: ApiAuthUser): AuthUser {
+  return {
+    id: user.id,
+    email: user.email,
+    name: user.name || user.email || 'Usuário',
+    role: normalizeRole(user.role),
+  };
 }
 
 async function parseJson<T>(response: Response): Promise<T> {
@@ -50,14 +79,24 @@ async function parseJson<T>(response: Response): Promise<T> {
   return response.json().catch(() => ({}) as T);
 }
 
-async function apiRequest<T extends ApiAuthResponse>(path: string, init: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}/api/auth${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...init.headers,
-    },
-  });
+async function apiRequest<T extends { error?: string }>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_BASE_URL}/api/auth${path}`, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...init.headers,
+      },
+    });
+  } catch {
+    throw new Error(NETWORK_ERROR_MESSAGE);
+  }
+
   const data = await parseJson<T>(response);
 
   if (!response.ok) {
@@ -67,7 +106,7 @@ async function apiRequest<T extends ApiAuthResponse>(path: string, init: Request
   return data;
 }
 
-function createSession(authData: ApiAuthResponse): AuthSession {
+function createSession(authData: ApiAuthResponse, rememberMe = true): AuthSession {
   if (!authData.accessToken || !authData.user || !authData.expiresAt) {
     throw new Error(
       authData.requiresEmailConfirmation
@@ -77,31 +116,45 @@ function createSession(authData: ApiAuthResponse): AuthSession {
   }
 
   return {
-    user: {
-      id: authData.user.id,
-      email: authData.user.email,
-      name: authData.user.name || authData.user.email || 'Usuário',
-      role: normalizeRole(authData.user.role),
-    },
+    user: normalizeUser(authData.user),
     token: authData.accessToken,
     refreshToken: authData.refreshToken ?? undefined,
     expiresAt: authData.expiresAt,
+    rememberMe,
   };
 }
 
+function isSessionFresh(session: AuthSession) {
+  return new Date(session.expiresAt).getTime() - EXPIRATION_SAFETY_WINDOW_MS > Date.now();
+}
+
+async function refreshStoredSession(session: AuthSession): Promise<AuthSession | null> {
+  if (!session.refreshToken) return null;
+
+  const data = await apiRequest<ApiAuthResponse>('/refresh', {
+    method: 'POST',
+    body: JSON.stringify({ refreshToken: session.refreshToken }),
+  });
+  const refreshedSession = createSession(data, session.rememberMe ?? true);
+  persistSession(refreshedSession, refreshedSession.rememberMe);
+  return refreshedSession;
+}
+
 export async function signIn(input: SignInInput): Promise<AuthSession> {
-  const data = await apiRequest('/login', {
+  const rememberMe = input.rememberMe ?? true;
+  const data = await apiRequest<ApiAuthResponse>('/login', {
     method: 'POST',
     body: JSON.stringify({ email: input.email.trim(), password: input.password }),
   });
 
-  const session = createSession(data);
-  persistSession(session, input.rememberMe ?? true);
+  const session = createSession(data, rememberMe);
+  persistSession(session, rememberMe);
   return session;
 }
 
 export async function signUp(input: SignUpInput): Promise<AuthSession> {
-  const data = await apiRequest('/register', {
+  const rememberMe = input.rememberMe ?? true;
+  const data = await apiRequest<ApiAuthResponse>('/register', {
     method: 'POST',
     body: JSON.stringify({
       name: input.name.trim(),
@@ -110,32 +163,61 @@ export async function signUp(input: SignUpInput): Promise<AuthSession> {
     }),
   });
 
-  const session = createSession(data);
-  persistSession(session, input.rememberMe ?? true);
+  const session = createSession(data, rememberMe);
+  persistSession(session, rememberMe);
   return session;
 }
 
 export async function signOut(): Promise<void> {
+  const session = await getSession({ validateRemotely: false });
+
+  if (session?.token) {
+    await apiRequest('/logout', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${session.token}` },
+    }).catch(() => undefined);
+  }
+
   clearSession();
 }
 
-export async function getSession(): Promise<AuthSession | null> {
-  if (typeof window === 'undefined') return null;
-
-  const raw =
-    window.localStorage.getItem(SESSION_STORAGE_KEY) ??
-    window.sessionStorage.getItem(SESSION_STORAGE_KEY);
-  if (!raw) return null;
+export async function getSession(
+  options: { validateRemotely?: boolean } = {},
+): Promise<AuthSession | null> {
+  const stored = getStoredSessionLocation();
+  if (!stored) return null;
 
   try {
-    const session = JSON.parse(raw) as AuthSession;
+    const session = JSON.parse(stored.raw) as AuthSession;
+    const rememberMe = session.rememberMe ?? stored.rememberMe;
+    let activeSession: AuthSession = { ...session, rememberMe };
 
-    if (new Date(session.expiresAt).getTime() <= Date.now()) {
-      clearSession();
-      return null;
+    if (!isSessionFresh(activeSession)) {
+      const refreshedSession = await refreshStoredSession(activeSession);
+      if (!refreshedSession) {
+        clearSession();
+        return null;
+      }
+      activeSession = refreshedSession;
     }
 
-    return session;
+    if (options.validateRemotely === false) {
+      return activeSession;
+    }
+
+    const data = await apiRequest<ApiMeResponse>('/me', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${activeSession.token}` },
+    });
+
+    if (data.user) {
+      const validatedSession = { ...activeSession, user: normalizeUser(data.user) };
+      persistSession(validatedSession, rememberMe);
+      return validatedSession;
+    }
+
+    clearSession();
+    return null;
   } catch {
     clearSession();
     return null;
