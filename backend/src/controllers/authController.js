@@ -185,7 +185,9 @@ export async function register(req, res) {
 
 export async function me(req, res) {
   try {
+
     if (!ensureSupabaseConfigured(res)) return;
+
 
     const { user, error } = await getAuthenticatedUser(req);
 
@@ -203,7 +205,9 @@ export async function me(req, res) {
 
 export async function refreshSession(req, res) {
   try {
+
     if (!ensureSupabaseConfigured(res)) return;
+
 
     const refreshToken = typeof req.body?.refreshToken === 'string' ? req.body.refreshToken : '';
 
@@ -229,7 +233,9 @@ export async function refreshSession(req, res) {
 
 export async function logout(req, res) {
   try {
+
     if (!ensureSupabaseConfigured(res)) return;
+
 
     const token = getBearerToken(req);
 
