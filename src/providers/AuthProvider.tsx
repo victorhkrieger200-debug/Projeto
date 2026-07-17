@@ -1,19 +1,7 @@
-import { createContext, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { getSession, requestPasswordReset, signIn, signOut, signUp } from '@/services/auth';
-import type { AuthSession, AuthUser, SignInInput, SignUpInput } from '@/types/auth';
-
-interface AuthContextValue {
-  user: AuthUser | null;
-  session: AuthSession | null;
-  isAuthenticated: boolean;
-  isLoading: boolean;
-  signIn: (input: SignInInput) => Promise<void>;
-  signUp: (input: SignUpInput) => Promise<void>;
-  signOut: () => Promise<void>;
-  requestPasswordReset: (email: string) => Promise<void>;
-}
-
-export const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+import { AuthContext, type AuthContextValue } from '@/providers/AuthContext';
+import type { AuthSession, SignInInput, SignUpInput } from '@/types/auth';
 
 interface AuthProviderProps {
   children: ReactNode;

@@ -54,8 +54,10 @@ function ForgotPassword() {
   const isSuccess = formState === "success";
 
   useEffect(() => {
+    const timeoutIds = timeoutsRef.current;
+
     return () => {
-      timeoutsRef.current.forEach((id) => clearTimeout(id));
+      timeoutIds.forEach((id) => clearTimeout(id));
     };
   }, []);
 

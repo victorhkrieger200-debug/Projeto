@@ -115,8 +115,10 @@ function Auth() {
   }, [isAuthenticated, navigate]);
 
   useEffect(() => {
+    const timeoutIds = timeoutsRef.current;
+
     return () => {
-      timeoutsRef.current.forEach((id) => clearTimeout(id));
+      timeoutIds.forEach((id) => clearTimeout(id));
     };
   }, []);
 

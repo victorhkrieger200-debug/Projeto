@@ -8,6 +8,7 @@ export interface AuthUser {
 export interface AuthSession {
   user: AuthUser;
   token: string;
+  refreshToken?: string;
   expiresAt: string;
 }
 
